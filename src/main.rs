@@ -23,6 +23,10 @@ impl Checker {
         }
         pattern
     }
+
+    pub fn is_success_pattern(pattern: &str) -> bool {
+        pattern == "GGGGG"
+    }
 }
 
 fn main() {
@@ -42,5 +46,11 @@ mod tests {
         assert_eq!(Checker::check("aabbb", "cccac"), "BBBYB");
         assert_eq!(Checker::check("aabbb", "caccc"), "BGBBB");
         assert_eq!(Checker::check("baabb", "acaac"), "YBGBB");
+    }
+
+    #[test]
+    fn check_if_success() {
+        assert_eq!(Checker::is_success_pattern("BBYBB"), false);
+        assert_eq!(Checker::is_success_pattern("GGGGG"), true);
     }
 }
