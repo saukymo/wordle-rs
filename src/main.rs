@@ -30,7 +30,11 @@ impl Checker {
 }
 
 fn main() {
-    println!("Hello, world!");
+    let answers: Vec<_> = include_str!("../data/answers.txt").lines().collect();
+    let words: Vec<_> = include_str!("../data/words.txt").lines().collect();
+
+    assert_eq!(answers.len(), 2315);
+    assert_eq!(words.len(), 12972);
 }
 
 #[cfg(test)]
