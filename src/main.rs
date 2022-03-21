@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use std::collections::HashSet;
 
 struct Checker {
 }
 
 impl Checker {
-    pub fn check(target: &String, guess: &String) -> String {
+    pub fn check(target: &str, guess: &str) -> String {
         let mut pattern: String = String::from("");
         let mut freq = HashMap::<char, usize>::new();
         for (guess_c, target_c) in guess.chars().zip(target.chars()) {
@@ -32,61 +31,50 @@ impl Checker {
         pattern
     }
 
-    pub fn is_success_pattern(pattern: &String) -> bool {
+    pub fn is_success_pattern(pattern: &str) -> bool {
         pattern == "GGGGG"
     }
 }
 
-struct Solver {
-    answers: Vec<String>
+struct Solver<'a> {
+    answers:HashSet<&'a str>
 }
 
-impl Solver {
-    pub fn guess(&self) -> &String{
-        let mut rng = thread_rng();
-        self.answers.choose(&mut rng).unwrap()
+impl<'a> Solver<'a> {
+    pub fn guess(&self) -> &str{
+        self.answers.iter().next().unwrap()
     }
 
-    pub fn update(&self, guess: &String, pattern: String) -> Vec<String> {
-        // let mut filtered_answers: Vec<String> = Vec::new();
-
-        // for answer in self.answers.iter() {
-        //     if Checker::check(answer, guess) == pattern {
-        //         filtered_answers.push(answer.to_string())
-        //     }
-        // }
-
-        // filtered_answers
-        self.answers.iter().filter(|answer| {
-            Checker::check(answer, guess) == pattern
-        }).map(|x| x.to_string()).collect()
+    pub fn update(&mut self, guess: &str, pattern: &str) {
+        self.answers.retain(|answer| {
+            Checker::check(answer, &guess) == pattern
+        });
     }
 }
 
-struct Evaluator {
-    answers: Vec<String>
+struct Evaluator<'a> {
+    answers: &'a HashSet<&'a str>
 }
 
-impl Evaluator {
+impl<'a> Evaluator<'_> {
     pub fn evaluate(&self) {
         let mut total = 0;
         for answer in self.answers.iter() {
             let mut solver = Solver {
-                answers: self.answers.clone()
+                answers: self.answers.into_iter().cloned().collect()
             };
 
             let mut turns = 0;
-
             loop {
-                let guess = solver.guess();
-                let pattern = Checker::check(&answer, guess);
+                let guess = solver.guess().to_string();
+                let pattern = Checker::check(answer, &guess);
 
                 turns += 1;
                 if Checker::is_success_pattern(&pattern) {
                     break;
                 }
 
-                solver.answers = solver.update(guess, pattern);
+                solver.update(&guess, &pattern)
             }
 
             total += turns;
@@ -97,14 +85,14 @@ impl Evaluator {
 }
 
 fn main() {
-    let answers: Vec<String> = include_str!("../data/answers.txt").lines().map(|x| x.to_string()).collect();
-    let words: Vec<String> = include_str!("../data/words.txt").lines().map(|x| x.to_string()).collect();
+    let answers: HashSet<_> = include_str!("../data/answers.txt").lines().collect();
+    let words: HashSet<_> = include_str!("../data/words.txt").lines().collect();
 
     assert_eq!(answers.len(), 2315);
     assert_eq!(words.len(), 12972);
 
     let evaluator = Evaluator {
-        answers
+        answers: &answers
     };
 
     evaluator.evaluate();
@@ -116,19 +104,19 @@ mod tests {
 
     #[test]
     fn basic_check() {
-        assert_eq!(Checker::check(&String::from("admin"), &String::from("crash")), String::from("BBYBB"));
-        assert_eq!(Checker::check(&String::from("abbbb"), &String::from("caccc")), String::from("BYBBB"));
-        assert_eq!(Checker::check(&String::from("babbb"), &String::from("caccc")), String::from("BGBBB"));
-        assert_eq!(Checker::check(&String::from("aabbb"), &String::from("ccaac")), String::from("BBYYB"));
-        assert_eq!(Checker::check(&String::from("aabbb"), &String::from("cccac")), String::from("BBBYB"));
-        assert_eq!(Checker::check(&String::from("aabbb"), &String::from("caccc")), String::from("BGBBB"));
-        assert_eq!(Checker::check(&String::from("baabb"), &String::from("acaac")), String::from("YBGBB"));
-        assert_eq!(Checker::check(&String::from("aaaar"), &String::from("error")), String::from("BBBBG"));
+        assert_eq!(Checker::check("admin", "crash"), "BBYBB");
+        assert_eq!(Checker::check("abbbb", "caccc"), "BYBBB");
+        assert_eq!(Checker::check("babbb", "caccc"), "BGBBB");
+        assert_eq!(Checker::check("aabbb", "ccaac"), "BBYYB");
+        assert_eq!(Checker::check("aabbb", "cccac"), "BBBYB");
+        assert_eq!(Checker::check("aabbb", "caccc"), "BGBBB");
+        assert_eq!(Checker::check("baabb", "acaac"), "YBGBB");
+        assert_eq!(Checker::check("aaaar", "error"), "BBBBG");
     }
 
     #[test]
     fn check_if_success() {
-        assert_eq!(Checker::is_success_pattern(&String::from("BBYBB")), false);
-        assert_eq!(Checker::is_success_pattern(&String::from("GGGGG")), true);
+        assert_eq!(Checker::is_success_pattern("BBYBB"), false);
+        assert_eq!(Checker::is_success_pattern("GGGGG"), true);
     }
 }
