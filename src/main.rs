@@ -2,13 +2,23 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-#[derive(Debug, PartialEq)]
+pub mod decision_tree;
+use decision_tree::DecisionTree;
+
+#[derive(Debug, PartialEq, Clone)]
 struct Restriction {
     required_green: HashMap<usize, char>,
     required_yellow: HashMap<char, usize>
 }
 
 impl Restriction {
+    pub fn new() -> Self {
+        Restriction {
+            required_green: HashMap::new(),
+            required_yellow: HashMap::new()
+        }
+    }
+
     pub fn from(guess: &str, pattern: &str) -> Self {
         let mut required_green: HashMap<usize, char> = HashMap::new();
         let mut required_yellow: HashMap<char, usize> = HashMap::new();
@@ -27,15 +37,19 @@ impl Restriction {
         }
     }
 
-    pub fn merge(&mut self, other: &Restriction) {
+    pub fn merge(&self, other: &Restriction) -> Self{
+        let mut restriction = self.clone();
+
         for (pos, c) in other.required_green.iter() {
-            self.required_green.insert(*pos, *c);
+            restriction.required_green.insert(*pos, *c);
         }
 
         for (c, other_count) in other.required_yellow.iter() {
-            let self_count = self.required_yellow.entry(*c).or_insert(0);
+            let self_count = restriction.required_yellow.entry(*c).or_insert(0);
             *self_count = max(*self_count, *other_count)
         }
+
+        restriction
     }
 
     pub fn evaluate(&self, guess: &str) -> bool {
@@ -114,20 +128,27 @@ impl<'a> Solver<'a> {
 }
 
 struct Evaluator<'a> {
-    answers: &'a HashSet<&'a str>
+    answers: &'a HashSet<&'a str>,
+    words: &'a HashSet<&'a str>
 }
 
 impl<'a> Evaluator<'_> {
-    pub fn evaluate(&self) {
+    pub fn evaluate(&self, is_hard:bool) {
         let mut total = 0;
         for answer in self.answers.iter() {
             let mut solver = Solver {
                 answers: self.answers.into_iter().cloned().collect()
             };
+            
+            let mut allowed = self.words.clone();
+            let mut restrictions = Restriction::new();
 
             let mut turns = 0;
             loop {
                 let guess = solver.guess().to_string();
+
+                assert_eq!(allowed.contains(guess.as_str()), true);
+
                 let pattern = Checker::check(answer, &guess);
 
                 turns += 1;
@@ -135,7 +156,12 @@ impl<'a> Evaluator<'_> {
                     break;
                 }
 
-                solver.update(&guess, &pattern)
+                solver.update(&guess, &pattern);
+
+                if is_hard {
+                    restrictions = restrictions.merge(&Restriction::from(&guess, &pattern));
+                    allowed = filter_available_guesses(&restrictions, allowed);
+                }
             }
 
             total += turns;
@@ -155,6 +181,11 @@ fn group_by_pattern<'a>(guess: &'a str, answers: &HashSet<&'a str>) -> HashMap<S
     groups
 }
 
+fn filter_available_guesses<'a> (restriction: &Restriction, words: HashSet<&'a str>) -> HashSet<&'a str> {
+    words.iter().filter(|word| {
+        restriction.evaluate(word)
+    }).cloned().collect()
+}
 
 fn main() {
     let answers: HashSet<_> = include_str!("../data/answers.txt").lines().collect();
@@ -164,11 +195,11 @@ fn main() {
     assert_eq!(words.len(), 12972);
 
     let evaluator = Evaluator {
-        answers: &answers
+        answers: &answers,
+        words: &words
     };
 
-    evaluator.evaluate();
-
+    evaluator.evaluate(true);
 }
 
 #[cfg(test)]
@@ -216,7 +247,7 @@ mod tests {
             required_yellow: HashMap::from([('c', 1)]),
         });
 
-        restriction_a.merge(&restriction_b);
+        restriction_a = restriction_a.merge(&restriction_b);
         assert_eq!(restriction_a, Restriction{
             required_green: HashMap::from([(0, 'a'), (1, 'a')]),
             required_yellow: HashMap::from([('c', 2)]),
@@ -226,6 +257,33 @@ mod tests {
         assert_eq!(restriction_a.evaluate("aaccz"), true);
         assert_eq!(restriction_a.evaluate("azbcc"), false);
         assert_eq!(restriction_a.evaluate("aabbc"), false);
+    }
 
+    #[test]
+    fn test_filter_guesses() {
+        let restriction = Restriction {
+            required_green: HashMap::from([(0, 'a'), (1, 'a')]),
+            required_yellow: HashMap::from([('c', 2)]),
+        };
+
+        let words = HashSet::from(["aazcc", "aaccz", "azbcc", "aabbc"]);
+
+        assert_eq!(filter_available_guesses(&restriction, words), HashSet::from(["aazcc", "aaccz"]));
+    }
+
+    #[test]
+    fn test_decision_tree() {
+        let a = DecisionTree::new("fiveb", HashMap::from([]));
+        let b = DecisionTree::new("salte", HashMap::from([]));
+
+        let mut c = &DecisionTree::new("salet", HashMap::from([
+            ("BBBBB", a),
+            ("GGGYY", b),
+        ]));
+        
+        assert_eq!(c.guess(), "salet");
+        c = DecisionTree::next(&c, "GGGYY");
+        assert_eq!(c.guess(), "salte");
+        
     }
 }
