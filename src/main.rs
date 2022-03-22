@@ -1,5 +1,66 @@
+use std::cmp::max;
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+#[derive(Debug, PartialEq)]
+struct Restriction {
+    required_green: HashMap<usize, char>,
+    required_yellow: HashMap<char, usize>
+}
+
+impl Restriction {
+    pub fn from(guess: &str, pattern: &str) -> Self {
+        let mut required_green: HashMap<usize, char> = HashMap::new();
+        let mut required_yellow: HashMap<char, usize> = HashMap::new();
+
+        for (i, (c, p)) in guess.chars().zip(pattern.chars()).enumerate() {
+            match p {
+                'G' => { required_green.insert(i, c); },
+                'Y' => { *required_yellow.entry(c).or_insert(0) += 1 },
+                _ => ()
+            }
+        }
+
+        Restriction {
+            required_green,
+            required_yellow
+        }
+    }
+
+    pub fn merge(&mut self, other: &Restriction) {
+        for (pos, c) in other.required_green.iter() {
+            self.required_green.insert(*pos, *c);
+        }
+
+        for (c, other_count) in other.required_yellow.iter() {
+            let self_count = self.required_yellow.entry(*c).or_insert(0);
+            *self_count = max(*self_count, *other_count)
+        }
+    }
+
+    pub fn evaluate(&self, guess: &str) -> bool {
+        for (pos, required_char) in self.required_green.iter() {
+            if let Some(c)  = guess.chars().nth(*pos) {
+                if c != *required_char {
+                    return false;
+                }
+            }
+        }   
+
+        let mut counter: HashMap<char, usize> = HashMap::new();
+        for c in guess.chars() {
+            *counter.entry(c).or_insert(0) += 1
+        }
+
+        for (c, required_count) in self.required_yellow.iter() {
+            if counter.get(&c).unwrap_or(&0) < &required_count {
+                return false;
+            }
+        }
+
+        true
+    }
+}
 
 struct Checker {
 }
@@ -84,6 +145,17 @@ impl<'a> Evaluator<'_> {
     }
 }
 
+
+fn group_by_pattern<'a>(guess: &'a str, answers: &HashSet<&'a str>) -> HashMap<String, HashSet<&'a str>>{
+    let mut groups = HashMap::new();
+    for answer in answers.into_iter() {
+        let pattern = Checker::check(answer, guess);
+        (*groups.entry(pattern).or_insert_with(HashSet::new)).insert(answer.clone());
+    }
+    groups
+}
+
+
 fn main() {
     let answers: HashSet<_> = include_str!("../data/answers.txt").lines().collect();
     let words: HashSet<_> = include_str!("../data/words.txt").lines().collect();
@@ -96,14 +168,17 @@ fn main() {
     };
 
     evaluator.evaluate();
+
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::Checker;
+    use crate::*;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
 
     #[test]
-    fn basic_check() {
+    fn test_check() {
         assert_eq!(Checker::check("admin", "crash"), "BBYBB");
         assert_eq!(Checker::check("abbbb", "caccc"), "BYBBB");
         assert_eq!(Checker::check("babbb", "caccc"), "BGBBB");
@@ -115,8 +190,42 @@ mod tests {
     }
 
     #[test]
-    fn check_if_success() {
+    fn test_if_success() {
         assert_eq!(Checker::is_success_pattern("BBYBB"), false);
         assert_eq!(Checker::is_success_pattern("GGGGG"), true);
+    }
+
+    #[test]
+    fn test_group_by_pattern() {
+        assert_eq!(group_by_pattern("salet", &HashSet::from(["sblet", "sclet", "zzzzz"])), HashMap::from([
+           (String::from("GBGGG"), HashSet::from(["sblet", "sclet"])),
+           (String::from("BBBBB"), HashSet::from(["zzzzz"])) 
+        ]));
+    }
+
+    #[test]
+    fn test_restriction() {
+        let mut restriction_a= Restriction {
+            required_green: HashMap::from([(1, 'a')]),
+            required_yellow: HashMap::from([('c', 2)]),
+        };
+        
+        let restriction_b = Restriction::from("azczz", "GBYBB");
+        assert_eq!(restriction_b, Restriction{
+            required_green: HashMap::from([(0, 'a')]),
+            required_yellow: HashMap::from([('c', 1)]),
+        });
+
+        restriction_a.merge(&restriction_b);
+        assert_eq!(restriction_a, Restriction{
+            required_green: HashMap::from([(0, 'a'), (1, 'a')]),
+            required_yellow: HashMap::from([('c', 2)]),
+        });
+
+        assert_eq!(restriction_a.evaluate("aazcc"), true);
+        assert_eq!(restriction_a.evaluate("aaccz"), true);
+        assert_eq!(restriction_a.evaluate("azbcc"), false);
+        assert_eq!(restriction_a.evaluate("aabbc"), false);
+
     }
 }
