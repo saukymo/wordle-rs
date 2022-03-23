@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use serde_json::Result;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecisionTree<'a> {
     pub guess: &'a str,
-    branch: HashMap<String, DecisionTree<'a>>
+    pub branch: HashMap<String, DecisionTree<'a>>
 }
 
 impl<'a> DecisionTree<'a> {
@@ -34,6 +36,11 @@ impl<'a> DecisionTree<'a> {
         pattern: &str
     ) -> &'a DecisionTree<'a> {
         current.branch.get(pattern).unwrap()
+    }
+
+    pub fn to_json(&self) -> Result<()> {
+        println!("{}", serde_json::to_string(self)?);
+        Ok(())
     }
 }
 
