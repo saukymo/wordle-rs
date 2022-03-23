@@ -1,22 +1,22 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Result;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecisionTree<'a> {
     pub guess: &'a str,
-    pub branch: HashMap<String, DecisionTree<'a>>
+    pub branch: BTreeMap<String, DecisionTree<'a>>
 }
 
 impl<'a> DecisionTree<'a> {
     pub fn new() -> Self {
         DecisionTree {
             guess: "",
-            branch: HashMap::new()
+            branch: BTreeMap::new()
         }
     }
 
-    pub fn from(guess:&'a str, branch:HashMap<String, DecisionTree<'a>>) -> Self {
+    pub fn from(guess:&'a str, branch:BTreeMap<String, DecisionTree<'a>>) -> Self {
         DecisionTree {
             guess,
             branch

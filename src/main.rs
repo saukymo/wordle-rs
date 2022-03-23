@@ -1,27 +1,26 @@
 use std::cmp::max;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, BTreeMap, BTreeSet};
 
 pub mod decision_tree;
 use decision_tree::DecisionTree;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Hash, Eq)]
 struct Restriction {
-    required_green: HashMap<usize, char>,
-    required_yellow: HashMap<char, usize>
+    required_green: BTreeMap<usize, char>,
+    required_yellow: BTreeMap<char, usize>
 }
 
 impl Restriction {
     pub fn new() -> Self {
         Restriction {
-            required_green: HashMap::new(),
-            required_yellow: HashMap::new()
+            required_green: BTreeMap::new(),
+            required_yellow: BTreeMap::new()
         }
     }
 
     pub fn from(guess: &str, pattern: &str) -> Self {
-        let mut required_green: HashMap<usize, char> = HashMap::new();
-        let mut required_yellow: HashMap<char, usize> = HashMap::new();
+        let mut required_green = BTreeMap::new();
+        let mut required_yellow = BTreeMap::new();
 
         for (i, (c, p)) in guess.chars().zip(pattern.chars()).enumerate() {
             match p {
@@ -123,8 +122,8 @@ impl<'a> Solver<'a> {
 }
 
 struct Evaluator<'a> {
-    answers: &'a HashSet<&'a str>,
-    words: &'a HashSet<&'a str>
+    answers: &'a BTreeSet<&'a str>,
+    words: &'a BTreeSet<&'a str>
 }
 
 impl<'a> Evaluator<'_> {
@@ -174,16 +173,28 @@ impl<'a> Evaluator<'_> {
 }
 
 
-fn group_by_pattern<'a>(guess: &'a str, answers: &HashSet<&'a str>) -> HashMap<String, HashSet<&'a str>>{
+fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> HashMap<String, BTreeSet<&'a str>>{
     let mut groups = HashMap::new();
     for answer in answers.into_iter() {
         let pattern = Checker::check(answer, guess);
-        (*groups.entry(pattern).or_insert_with(HashSet::new)).insert(answer.clone());
+        (*groups.entry(pattern).or_insert_with(BTreeSet::new)).insert(answer.clone());
     }
     groups
 }
 
-fn filter_available_guesses<'a> (restriction: &Restriction, words: &HashSet<&'a str>) -> HashSet<&'a str> {
+fn get_entropy<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> Option<(&'a str, u32, HashMap<String, BTreeSet<&'a str>>)>{
+    let groups = group_by_pattern(guess, answers);
+    if groups.len() == 1 && !groups.contains_key("GGGGG") {
+        return None
+    };
+    let entropy = groups.iter().map(|(_guess, group)| {
+        2 * group.len() as u32 - 1
+    }).sum();
+
+    Some((guess, entropy, groups))
+}
+
+fn filter_available_guesses<'a> (restriction: &Restriction, words: &BTreeSet<&'a str>) -> BTreeSet<&'a str> {
     words.iter().filter(|word| {
         restriction.evaluate(word)
     }).cloned().collect()
@@ -192,7 +203,7 @@ fn filter_available_guesses<'a> (restriction: &Restriction, words: &HashSet<&'a 
 #[derive(Debug, Clone, PartialEq)]
 struct Best<'a> {
     max_level: u8,
-    total_count: i16,
+    total_count: u32,
     decision_tree: DecisionTree<'a>
 }
 
@@ -200,21 +211,21 @@ impl<'a> Best<'a> {
     pub fn new() -> Self {
         Best {
             max_level: 0,
-            total_count: -1,
+            total_count: u32::MAX,
             decision_tree: DecisionTree::new()
         }
     }
 
-    pub fn init(guess: &'a str, total_count: i16) -> Self {
+    pub fn init(guess: &'a str, total_count: u32) -> Self {
         Best {
             max_level: 0,
             total_count: total_count,
-            decision_tree: DecisionTree::from(guess, HashMap::new())
+            decision_tree: DecisionTree::from(guess, BTreeMap::new())
         }
     }
 
     pub fn better(&mut self, other: Best<'a>) {
-        if self.total_count == -1 || self.total_count > other.total_count || (self.total_count == other.total_count && self.max_level > other.max_level + 1) {
+        if self.total_count > other.total_count || (self.total_count == other.total_count && self.max_level > other.max_level + 1) {
             self.max_level = other.max_level + 1;
             self.total_count = other.total_count;
             self.decision_tree = other.decision_tree;
@@ -228,7 +239,16 @@ impl<'a> Best<'a> {
     }
 }   
 
-fn dfs<'a>(current: u8, answers: &HashSet<&'a str>, availables: &HashSet<&'a str>, restrictions: Restriction) -> Best<'a> {
+type Cache<'a> = HashMap<Restriction, HashMap<BTreeSet<&'a str>, Best<'a>>>;
+
+
+fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>, restrictions: Restriction, cache:&mut Cache<'a>) -> Best<'a> {
+
+    if let Some(answers_cache) = cache.get(&restrictions) {
+        if answers_cache.contains_key(answers) {
+            return answers_cache[answers].clone();
+        }
+    }
 
     let valid_guesses = if answers.len() <= 3 {
         &answers
@@ -238,14 +258,28 @@ fn dfs<'a>(current: u8, answers: &HashSet<&'a str>, availables: &HashSet<&'a str
 
     let mut best_of_all_guess = Best::new();
 
-    for guess in valid_guesses.iter() {
+    let mut preprocess_by_guess:Vec<_> = valid_guesses
+        .iter()
+        .filter_map(|guess| get_entropy(guess, &answers))
+        .collect();
 
+    preprocess_by_guess.sort_by(|(_, entropy_a, _), (_, entropy_b, _)| entropy_b.cmp(entropy_a));
 
-        let groups = group_by_pattern(guess, &answers);
-        if groups.len() == 1 && !groups.contains_key("GGGGG") {
-            continue
+    for (guess, _entropy, groups) in preprocess_by_guess.iter() {
+
+        let lower_bound: u32 = groups.iter().map(|(pattern, answers)| {
+            if Checker::is_success_pattern(pattern) {
+                0
+            } else {
+                2 * answers.len() as u32 - 1
+            }
+        }).sum();
+
+        if lower_bound > best_of_all_guess.total_count {
+            continue;
         }
-        let mut current_guess = Best::init(guess, answers.len() as i16);
+
+        let mut current_guess = Best::init(guess, answers.len() as u32);
 
         for (pattern, pattern_answers) in  groups {
             let sub_result = if Checker::is_success_pattern(&pattern) {
@@ -256,23 +290,25 @@ fn dfs<'a>(current: u8, answers: &HashSet<&'a str>, availables: &HashSet<&'a str
                 }
             } else {
                 let new_restrictions = restrictions.merge(&Restriction::from(guess, &pattern));
-                dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables), new_restrictions)
+                dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables), new_restrictions, cache)
             };
             
-            current_guess.update(pattern, sub_result);
+            current_guess.update(pattern.to_string(), sub_result);
         }
 
         best_of_all_guess.better(current_guess);
     }
 
+    cache.entry(restrictions).or_insert_with(HashMap::new).insert(availables.to_owned(), best_of_all_guess.clone());
+
     best_of_all_guess
 }
 
 fn main() {
-    let answers: HashSet<_> = include_str!("../data/answers.txt").lines().take(10).collect();
-    let words: HashSet<_> = include_str!("../data/words.txt").lines().take(100).collect();
+    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(100).collect();
+    let words: BTreeSet<_> = include_str!("../data/words.txt").lines().take(1000).collect();
 
-    let best = dfs(0, &answers, &words, Restriction::new());
+    let best = dfs(0, &answers, &words, Restriction::new(), &mut Cache::new());
 
     println!("{}, {}", best.max_level, best.total_count);
     
@@ -290,7 +326,7 @@ fn main() {
 mod tests {
     use crate::*;
     use std::collections::HashMap;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_check() {
@@ -312,29 +348,29 @@ mod tests {
 
     #[test]
     fn test_group_by_pattern() {
-        assert_eq!(group_by_pattern("salet", &HashSet::from(["sblet", "sclet", "zzzzz"])), HashMap::from([
-           (String::from("GBGGG"), HashSet::from(["sblet", "sclet"])),
-           (String::from("BBBBB"), HashSet::from(["zzzzz"])) 
+        assert_eq!(group_by_pattern("salet", &BTreeSet::from(["sblet", "sclet", "zzzzz"])), HashMap::from([
+           (String::from("GBGGG"), BTreeSet::from(["sblet", "sclet"])),
+           (String::from("BBBBB"), BTreeSet::from(["zzzzz"])) 
         ]));
     }
 
     #[test]
     fn test_restriction() {
         let mut restriction_a= Restriction {
-            required_green: HashMap::from([(1, 'a')]),
-            required_yellow: HashMap::from([('c', 2)]),
+            required_green: BTreeMap::from([(1, 'a')]),
+            required_yellow: BTreeMap::from([('c', 2)]),
         };
         
         let restriction_b = Restriction::from("azczz", "GBYBB");
         assert_eq!(restriction_b, Restriction{
-            required_green: HashMap::from([(0, 'a')]),
-            required_yellow: HashMap::from([('c', 1)]),
+            required_green: BTreeMap::from([(0, 'a')]),
+            required_yellow: BTreeMap::from([('c', 1)]),
         });
 
         restriction_a = restriction_a.merge(&restriction_b);
         assert_eq!(restriction_a, Restriction{
-            required_green: HashMap::from([(0, 'a'), (1, 'a')]),
-            required_yellow: HashMap::from([('c', 2)]),
+            required_green: BTreeMap::from([(0, 'a'), (1, 'a')]),
+            required_yellow: BTreeMap::from([('c', 2)]),
         });
 
         assert_eq!(restriction_a.evaluate("aazcc"), true);
@@ -346,21 +382,21 @@ mod tests {
     #[test]
     fn test_filter_guesses() {
         let restriction = Restriction {
-            required_green: HashMap::from([(0, 'a'), (1, 'a')]),
-            required_yellow: HashMap::from([('c', 2)]),
+            required_green: BTreeMap::from([(0, 'a'), (1, 'a')]),
+            required_yellow: BTreeMap::from([('c', 2)]),
         };
 
-        let words = HashSet::from(["aazcc", "aaccz", "azbcc", "aabbc"]);
+        let words = BTreeSet::from(["aazcc", "aaccz", "azbcc", "aabbc"]);
 
-        assert_eq!(filter_available_guesses(&restriction, &words), HashSet::from(["aazcc", "aaccz"]));
+        assert_eq!(filter_available_guesses(&restriction, &words), BTreeSet::from(["aazcc", "aaccz"]));
     }
 
     #[test]
     fn test_decision_tree() {
-        let a = DecisionTree::from("fiveb", HashMap::from([]));
-        let b = DecisionTree::from("salte", HashMap::from([]));
+        let a = DecisionTree::from("fiveb", BTreeMap::from([]));
+        let b = DecisionTree::from("salte", BTreeMap::from([]));
 
-        let mut c = &DecisionTree::from("salet", HashMap::from([
+        let mut c = &DecisionTree::from("salet", BTreeMap::from([
             (String::from("BBBBB"), a),
             (String::from("GGGYY"), b),
         ]));
@@ -373,11 +409,11 @@ mod tests {
 
     #[test]
     fn test_single_search() {
-        let best = dfs(0, &HashSet::from(["salet"]), &HashSet::from(["salet"]), Restriction::new());
+        let best = dfs(0, &BTreeSet::from(["salet"]), &BTreeSet::from(["salet"]), Restriction::new(), &mut Cache::new());
         assert_eq!(best, Best {
             max_level: 1,
             total_count: 1,
-            decision_tree: DecisionTree::from("salet", HashMap::from([
+            decision_tree: DecisionTree::from("salet", BTreeMap::from([
                 (String::from("GGGGG"), DecisionTree::new())
             ]))
         })
@@ -385,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_a_few_search() {
-        let answers = HashSet::from(["aback", 
+        let answers = BTreeSet::from(["aback", 
         "abase",
         "abate",
         "abbey",
@@ -396,7 +432,7 @@ mod tests {
         "abode",
         "abort"]);
     
-        let words = HashSet::from(["aback", 
+        let words = BTreeSet::from(["aback", 
         "abase",
         "abate",
         "abbey",
@@ -407,7 +443,7 @@ mod tests {
         "abode",
         "abort"]);
 
-        let best = dfs(0, &answers, &words, Restriction::new());
+        let best = dfs(0, &answers, &words, Restriction::new(), &mut Cache::new());
         assert_eq!(best.max_level, 3);
         assert_eq!(best.total_count, 21);
     }
