@@ -160,7 +160,7 @@ impl<'a> Evaluator<'_> {
 
                 if is_hard {
                     restrictions = restrictions.merge(&Restriction::from(&guess, &pattern));
-                    allowed = filter_available_guesses(&restrictions, allowed);
+                    allowed = filter_available_guesses(&restrictions, &allowed);
                 }
             }
 
@@ -181,10 +181,84 @@ fn group_by_pattern<'a>(guess: &'a str, answers: &HashSet<&'a str>) -> HashMap<S
     groups
 }
 
-fn filter_available_guesses<'a> (restriction: &Restriction, words: HashSet<&'a str>) -> HashSet<&'a str> {
+fn filter_available_guesses<'a> (restriction: &Restriction, words: &HashSet<&'a str>) -> HashSet<&'a str> {
     words.iter().filter(|word| {
         restriction.evaluate(word)
     }).cloned().collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Best<'a> {
+    max_level: u8,
+    total_count: i16,
+    decision_tree: DecisionTree<'a>
+}
+
+impl<'a> Best<'a> {
+    pub fn new() -> Self {
+        Best {
+            max_level: 0,
+            total_count: -1,
+            decision_tree: DecisionTree::new()
+        }
+    }
+
+    pub fn init(guess: &'a str) -> Self {
+        Best {
+            max_level: 0,
+            total_count: 0,
+            decision_tree: DecisionTree::from(guess, HashMap::new())
+        }
+    }
+
+    pub fn better(&mut self, other: Best<'a>) {
+        if self.total_count == -1 || self.total_count < other.total_count || (self.total_count == other.total_count && self.max_level < other.max_level) {
+            self.max_level = other.max_level;
+            self.total_count = other.total_count;
+            self.decision_tree = other.decision_tree;
+        }
+    }
+
+    pub fn update(&mut self, pattern: String, other: Best<'a>) {
+        self.max_level = max(self.max_level, other.max_level);
+        self.total_count += other.total_count;
+        self.decision_tree.add_branch(pattern, other.decision_tree);
+    }
+}   
+
+fn dfs<'a>(current: u8, answers: HashSet<&'a str>, availables: HashSet<&'a str>, restrictions: Restriction) -> Best<'a> {
+    
+    let valid_guesses = if answers.len() <= 3 {
+        &answers
+    } else {
+        &availables
+    };
+
+    let mut best_of_all_guess = Best::new();
+
+    for guess in valid_guesses.iter() {
+
+        let mut current_guess = Best::init(guess);
+
+        for (pattern, pattern_answers) in group_by_pattern(guess, &answers) {
+            let current_pattern = if Checker::is_success_pattern(&pattern) {
+                Best {
+                    max_level: 1,
+                    total_count: 1,
+                    decision_tree: DecisionTree::new()
+                }
+            } else {
+                let new_restrictions = restrictions.merge(&Restriction::from(guess, &pattern));
+                dfs(current + 1, pattern_answers, filter_available_guesses(&new_restrictions, &availables), new_restrictions)
+            };
+            
+            current_guess.update(pattern, current_pattern);
+        }
+
+        best_of_all_guess.better(current_guess);
+    }
+
+    best_of_all_guess
 }
 
 fn main() {
@@ -268,22 +342,34 @@ mod tests {
 
         let words = HashSet::from(["aazcc", "aaccz", "azbcc", "aabbc"]);
 
-        assert_eq!(filter_available_guesses(&restriction, words), HashSet::from(["aazcc", "aaccz"]));
+        assert_eq!(filter_available_guesses(&restriction, &words), HashSet::from(["aazcc", "aaccz"]));
     }
 
     #[test]
     fn test_decision_tree() {
-        let a = DecisionTree::new("fiveb", HashMap::from([]));
-        let b = DecisionTree::new("salte", HashMap::from([]));
+        let a = DecisionTree::from("fiveb", HashMap::from([]));
+        let b = DecisionTree::from("salte", HashMap::from([]));
 
-        let mut c = &DecisionTree::new("salet", HashMap::from([
-            ("BBBBB", a),
-            ("GGGYY", b),
+        let mut c = &DecisionTree::from("salet", HashMap::from([
+            (String::from("BBBBB"), a),
+            (String::from("GGGYY"), b),
         ]));
         
         assert_eq!(c.guess(), "salet");
         c = DecisionTree::next(&c, "GGGYY");
         assert_eq!(c.guess(), "salte");
         
+    }
+
+    #[test]
+    fn test_single_search() {
+        let best = dfs(0, HashSet::from(["salet"]), HashSet::from(["salet"]), Restriction::new());
+        assert_eq!(best, Best {
+            max_level: 1,
+            total_count: 1,
+            decision_tree: DecisionTree::from("salet", HashMap::from([
+                (String::from("GGGGG"), DecisionTree::new())
+            ]))
+        })
     }
 }
