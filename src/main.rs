@@ -4,6 +4,9 @@ use std::collections::{HashMap, BTreeMap, BTreeSet};
 pub mod decision_tree;
 use decision_tree::DecisionTree;
 
+
+const MAX_TURNS: u8 = 5;
+
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 struct Restriction {
     required_green: BTreeMap<usize, char>,
@@ -129,6 +132,7 @@ struct Evaluator<'a> {
 impl<'a> Evaluator<'_> {
     pub fn evaluate(&self, decision_tree: DecisionTree, is_hard:bool) {
         let mut total = 0;
+        let mut max_turn = 0;
         for answer in self.answers.iter() {
 
             println!("============{}============", answer);
@@ -166,9 +170,10 @@ impl<'a> Evaluator<'_> {
             }
 
             total += turns;
+            max_turn = max(max_turn, turns)
         }
 
-        println!("{:}: {:}", total, total as f32 / self.answers.len() as f32);
+        println!("Total: {}, Avg: {}, Max: {}", total, total as f32 / self.answers.len() as f32, max_turn);
     }
 }
 
@@ -182,13 +187,30 @@ fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> HashMap<
     groups
 }
 
-fn get_entropy<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> Option<(&'a str, u32, HashMap<String, BTreeSet<&'a str>>)>{
+
+fn get_entropy(pattern: &str, length: u32) -> u32 {
+
+    let l = length as f32;
+    (l * l.log2().floor()) as u32
+
+
+    // if pattern == "GGGGG" {
+    //     return 0
+    // } else {
+    //     return 2 * length - 1
+    // }
+    
+}
+
+
+
+fn get_entropy_sum<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> Option<(&'a str, u32, HashMap<String, BTreeSet<&'a str>>)>{
     let groups = group_by_pattern(guess, answers);
     if groups.len() == 1 && !groups.contains_key("GGGGG") {
         return None
     };
-    let entropy = groups.iter().map(|(_guess, group)| {
-        2 * group.len() as u32 - 1
+    let entropy = groups.iter().map(|(pattern, group)| {
+        get_entropy(pattern, group.len() as u32)
     }).sum();
 
     Some((guess, entropy, groups))
@@ -202,6 +224,7 @@ fn filter_available_guesses<'a> (restriction: &Restriction, words: &BTreeSet<&'a
 
 #[derive(Debug, Clone, PartialEq)]
 struct Best<'a> {
+    has_result: bool,
     max_level: u8,
     total_count: u32,
     decision_tree: DecisionTree<'a>
@@ -210,6 +233,7 @@ struct Best<'a> {
 impl<'a> Best<'a> {
     pub fn new() -> Self {
         Best {
+            has_result: false,
             max_level: 0,
             total_count: u32::MAX,
             decision_tree: DecisionTree::new()
@@ -218,6 +242,7 @@ impl<'a> Best<'a> {
 
     pub fn init(guess: &'a str, total_count: u32) -> Self {
         Best {
+            has_result: true,
             max_level: 0,
             total_count: total_count,
             decision_tree: DecisionTree::from(guess, BTreeMap::new())
@@ -225,90 +250,154 @@ impl<'a> Best<'a> {
     }
 
     pub fn better(&mut self, other: Best<'a>) {
+        if !other.has_result {
+            return;
+        }
+
         if self.total_count > other.total_count || (self.total_count == other.total_count && self.max_level > other.max_level + 1) {
             self.max_level = other.max_level + 1;
             self.total_count = other.total_count;
             self.decision_tree = other.decision_tree;
+            self.has_result = true;
         }
     }
 
     pub fn update(&mut self, pattern: String, other: Best<'a>) {
+        if !other.has_result {
+            return;
+        }
+
         self.max_level = max(self.max_level, other.max_level);
         self.total_count += other.total_count;
         self.decision_tree.add_branch(pattern, other.decision_tree);
+        self.has_result = true;
     }
 }   
 
-type Cache<'a> = HashMap<Restriction, HashMap<BTreeSet<&'a str>, Best<'a>>>;
+type Cache<'a> = HashMap<Restriction, HashMap<BTreeSet<&'a str>, HashMap<u8, Best<'a>>>>;
 
 
 fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>, restrictions: Restriction, cache:&mut Cache<'a>) -> Best<'a> {
 
-    if let Some(answers_cache) = cache.get(&restrictions) {
-        if answers_cache.contains_key(answers) {
-            return answers_cache[answers].clone();
-        }
+    if current > MAX_TURNS {
+        return Best::new();
     }
-
-    let valid_guesses = if answers.len() <= 3 {
-        &answers
-    } else {
-        &availables
-    };
 
     let mut best_of_all_guess = Best::new();
 
+    if let Some(restrictions_cache) = cache.get(&restrictions) {
+        if let Some(answers_cache) = restrictions_cache.get(answers) {
+            if let Some(level_cache) = answers_cache.get(&current) {
+                return level_cache.clone();
+            }
+
+            for level in 0..(current - 1) {
+                if let Some(level_cache) = answers_cache.get(&level) {
+                    if !level_cache.has_result || level_cache.max_level + current <= MAX_TURNS {
+                        return level_cache.clone()
+                    }
+                }
+            }
+
+            for level in (current + 1) .. MAX_TURNS {
+                if let Some(level_cache) = answers_cache.get(&level) {
+                    best_of_all_guess = level_cache.clone();
+                    break
+                }
+            }
+        }
+    }
+
+    let start_word = BTreeSet::from(["salet"]);
+    let valid_guesses = if current == 0 {
+        &start_word
+    } else {
+        if answers.len() <= 3 {
+            &answers
+        } else {
+            &availables
+        }
+    };
+
     let mut preprocess_by_guess:Vec<_> = valid_guesses
         .iter()
-        .filter_map(|guess| get_entropy(guess, &answers))
+        .filter_map(|guess| get_entropy_sum(guess, &answers))
         .collect();
 
     preprocess_by_guess.sort_by(|(_, entropy_a, _), (_, entropy_b, _)| entropy_b.cmp(entropy_a));
 
-    for (guess, _entropy, groups) in preprocess_by_guess.iter() {
+    for (guess, entropy, groups) in preprocess_by_guess.iter() {
 
-        let lower_bound: u32 = groups.iter().map(|(pattern, answers)| {
-            if Checker::is_success_pattern(pattern) {
-                0
-            } else {
-                2 * answers.len() as u32 - 1
-            }
-        }).sum();
+        let mut lower_bound = *entropy;
+        let mut current_guess = Best::init(guess, answers.len() as u32);
 
-        if lower_bound > best_of_all_guess.total_count {
+        if current_guess.total_count + lower_bound > best_of_all_guess.total_count {
             continue;
         }
 
-        let mut current_guess = Best::init(guess, answers.len() as u32);
+        let mut sorted_groups: Vec<_> = groups.into_iter().collect();
+        sorted_groups.sort_unstable_by_key(|(_, g)| g.len()); 
 
-        for (pattern, pattern_answers) in  groups {
+        for (pattern, pattern_answers) in sorted_groups {
             let sub_result = if Checker::is_success_pattern(&pattern) {
                 Best {
+                    has_result: true,
                     max_level: 0,
                     total_count: 0,
                     decision_tree: DecisionTree::new()
                 }
+            } else if pattern_answers.len() == 1{
+                Best {
+                    has_result: true,
+                    max_level: 1,
+                    total_count: 1,
+                    decision_tree: DecisionTree::from(pattern_answers.iter().nth(0).unwrap(), BTreeMap::from([(String::from("GGGGG"), DecisionTree::new())]))
+                }
             } else {
-                let new_restrictions = restrictions.merge(&Restriction::from(guess, &pattern));
+                if current + 1 > MAX_TURNS {
+                    break
+                }
+
+                // let new_restrictions = restrictions.merge(&Restriction::from(guess, &pattern));
+                let new_restrictions = Restriction::from(guess, &pattern);
                 dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables), new_restrictions, cache)
             };
             
+            if !sub_result.has_result {
+                break
+            }
+
             current_guess.update(pattern.to_string(), sub_result);
+
+            let current_entropy = get_entropy(pattern, pattern_answers.len() as u32);
+            lower_bound -= current_entropy;
+
+            if current_guess.total_count  + lower_bound > best_of_all_guess.total_count {
+                current_guess.has_result = false;
+                break
+            }
         }
 
-        best_of_all_guess.better(current_guess);
+        if current_guess.has_result {
+            best_of_all_guess.better(current_guess);
+        }
     }
 
-    cache.entry(restrictions).or_insert_with(HashMap::new).insert(availables.to_owned(), best_of_all_guess.clone());
+    cache
+        .entry(restrictions)
+        .or_insert_with(HashMap::new)
+        .entry(availables.to_owned())
+        .or_insert_with(HashMap::new)
+        .insert(current, best_of_all_guess.clone());
 
     best_of_all_guess
 }
 
 fn main() {
-    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(100).collect();
-    let words: BTreeSet<_> = include_str!("../data/words.txt").lines().take(1000).collect();
+    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(200).collect();
+    let words: BTreeSet<_> = include_str!("../data/words.txt").lines().collect();
 
-    let best = dfs(0, &answers, &words, Restriction::new(), &mut Cache::new());
+     let best = dfs(0, &answers, &words, Restriction::new(), &mut Cache::new());
 
     println!("{}, {}", best.max_level, best.total_count);
     
@@ -411,6 +500,7 @@ mod tests {
     fn test_single_search() {
         let best = dfs(0, &BTreeSet::from(["salet"]), &BTreeSet::from(["salet"]), Restriction::new(), &mut Cache::new());
         assert_eq!(best, Best {
+            has_result: true,
             max_level: 1,
             total_count: 1,
             decision_tree: DecisionTree::from("salet", BTreeMap::from([
@@ -444,6 +534,7 @@ mod tests {
         "abort"]);
 
         let best = dfs(0, &answers, &words, Restriction::new(), &mut Cache::new());
+        assert_eq!(best.has_result, true);
         assert_eq!(best.max_level, 3);
         assert_eq!(best.total_count, 21);
     }
