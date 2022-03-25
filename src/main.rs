@@ -21,15 +21,23 @@ impl Restriction {
         }
     }
 
-    pub fn from(guess: &str, pattern: &str) -> Self {
+    pub fn from(guess: &str, pattern: u8) -> Self {
         let mut required_green = BTreeMap::new();
         let mut required_yellow = BTreeMap::new();
 
-        for (i, (c, p)) in guess.chars().zip(pattern.chars()).enumerate() {
+
+        let mut current = pattern;
+        for (i, c) in guess.chars().enumerate() {
+            let p = current % 3;
             match p {
-                'G' => { required_green.insert(i, c); },
-                'Y' => { *required_yellow.entry(c).or_insert(0) += 1 },
+                2 => { required_green.insert(i, c); },
+                1 => { *required_yellow.entry(c).or_insert(0) += 1 },
                 _ => ()
+            }
+
+            current /= 3;
+            if current == 0 {
+                break
             }
         }
 
@@ -82,8 +90,7 @@ struct Checker {
 }
 
 impl Checker {
-    pub fn check(target: &str, guess: &str) -> String {
-        let mut pattern: String = String::from("");
+    pub fn check(target: &str, guess: &str) -> u8 {
         let mut freq = HashMap::<char, usize>::new();
         for (guess_c, target_c) in guess.chars().zip(target.chars()) {
             if guess_c != target_c {
@@ -92,24 +99,27 @@ impl Checker {
             }
         }
 
+        let mut pattern: u8 = 0;
+        let mut base: u8 = 1;
         for (guess_c, target_c) in guess.chars().zip(target.chars()) {
             if guess_c == target_c {
-                pattern += "G";
+                pattern += 2 * base;
             } else {
                 let counter = freq.entry(guess_c).or_insert(0);
                 if *counter > 0 {
-                    pattern += "Y";
+                    pattern += base;
                     *counter -= 1;
-                } else {
-                    pattern += "B";
-                }
+                } 
             }
+
+            base *= 3;
         }
+
         pattern
     }
 
-    pub fn is_success_pattern(pattern: &str) -> bool {
-        pattern == "GGGGG"
+    pub fn is_success_pattern(pattern: u8) -> bool {
+        pattern == 242
     }
 }
 
@@ -155,14 +165,14 @@ impl<'a> Evaluator<'_> {
                 println!("{}: {} {}", turns, guess, pattern);
 
                 turns += 1;
-                if Checker::is_success_pattern(&pattern) {
+                if Checker::is_success_pattern(pattern) {
                     break;
                 }
 
-                solver.current = DecisionTree::next(solver.current, &pattern);
+                solver.current = DecisionTree::next(solver.current, pattern);
 
                 if is_hard {
-                    restrictions = restrictions.merge(&Restriction::from(&guess, &pattern));
+                    restrictions = restrictions.merge(&Restriction::from(&guess, pattern));
                     allowed = filter_available_guesses(&restrictions, &allowed);
                 }
 
@@ -178,7 +188,7 @@ impl<'a> Evaluator<'_> {
 }
 
 
-fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> HashMap<String, BTreeSet<&'a str>>{
+fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> HashMap<u8, BTreeSet<&'a str>>{
     let mut groups = HashMap::new();
     for answer in answers.into_iter() {
         let pattern = Checker::check(answer, guess);
@@ -188,7 +198,7 @@ fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> HashMap<
 }
 
 
-fn get_entropy(pattern: &str, length: u32) -> u32 {
+fn get_entropy(pattern: u8, length: u32) -> u32 {
 
     let l = length as f32;
     (l * l.log2().floor()) as u32
@@ -207,13 +217,14 @@ fn get_lower_bound_level(length: usize) -> u8 {
     (l.log2() / 243_f32.log2()).ceil() as u8 + 1
 }
 
-fn get_entropy_sum<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> Option<(&'a str, u32, HashMap<String, BTreeSet<&'a str>>)>{
+fn get_entropy_sum<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> Option<(&'a str, u32, HashMap<u8, BTreeSet<&'a str>>)>{
     let groups = group_by_pattern(guess, answers);
-    if groups.len() == 1 && !groups.contains_key("GGGGG") {
+
+    if groups.len() == 1 && !groups.contains_key(&242) {
         return None
     };
     let entropy = groups.iter().map(|(pattern, group)| {
-        get_entropy(pattern, group.len() as u32)
+        get_entropy(*pattern, group.len() as u32)
     }).sum();
 
     Some((guess, entropy, groups))
@@ -265,7 +276,7 @@ impl<'a> Best<'a> {
         }
     }
 
-    pub fn update(&mut self, pattern: String, other: Best<'a>) {
+    pub fn update(&mut self, pattern: u8, other: Best<'a>) {
         if !other.has_result {
             return;
         }
@@ -316,8 +327,9 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
         let mut sorted_groups: Vec<_> = groups.into_iter().collect();
         sorted_groups.sort_unstable_by_key(|(_, g)| g.len()); 
 
-        for (pattern, pattern_answers) in sorted_groups {
-            let sub_result = if Checker::is_success_pattern(&pattern) {
+        for (pattern, pattern_answers) in groups {
+
+            let sub_result = if Checker::is_success_pattern(*pattern) {
                 Best {
                     has_result: true,
                     max_level: 0,
@@ -329,7 +341,7 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
                     has_result: true,
                     max_level: 1,
                     total_count: 1,
-                    decision_tree: DecisionTree::from(pattern_answers.iter().nth(0).unwrap(), BTreeMap::from([(String::from("GGGGG"), DecisionTree::new())]))
+                    decision_tree: DecisionTree::from(pattern_answers.iter().nth(0).unwrap(), BTreeMap::from([(242, DecisionTree::new())]))
                 }
             } else {
                 if current + get_lower_bound_level(pattern_answers.len()) > MAX_TURNS {
@@ -338,7 +350,7 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
                 }
 
                 // let new_restrictions = restrictions.merge(&Restriction::from(guess, &pattern));
-                let new_restrictions = Restriction::from(guess, &pattern);
+                let new_restrictions = Restriction::from(guess, *pattern);
                 dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables))
             };
             
@@ -347,9 +359,9 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
                 break
             }
 
-            current_guess.update(pattern.to_string(), sub_result);
+            current_guess.update(*pattern, sub_result);
 
-            let current_entropy = get_entropy(pattern, pattern_answers.len() as u32);
+            let current_entropy = get_entropy(*pattern, pattern_answers.len() as u32);
             lower_bound -= current_entropy;
 
             if current_guess.total_count  + lower_bound > best_of_all_guess.total_count {
@@ -368,6 +380,7 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
 
 fn main() {
     // 200, total 582, 72s
+    // pattern from string -> u8, 67s
     let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(200).collect();
     let words: BTreeSet<_> = include_str!("../data/words.txt").lines().collect();
 
@@ -393,27 +406,27 @@ mod tests {
 
     #[test]
     fn test_check() {
-        assert_eq!(Checker::check("admin", "crash"), "BBYBB");
-        assert_eq!(Checker::check("abbbb", "caccc"), "BYBBB");
-        assert_eq!(Checker::check("babbb", "caccc"), "BGBBB");
-        assert_eq!(Checker::check("aabbb", "ccaac"), "BBYYB");
-        assert_eq!(Checker::check("aabbb", "cccac"), "BBBYB");
-        assert_eq!(Checker::check("aabbb", "caccc"), "BGBBB");
-        assert_eq!(Checker::check("baabb", "acaac"), "YBGBB");
-        assert_eq!(Checker::check("aaaar", "error"), "BBBBG");
+        assert_eq!(Checker::check("admin", "crash"), 9);
+        assert_eq!(Checker::check("abbbb", "caccc"), 3);
+        assert_eq!(Checker::check("babbb", "caccc"), 6);
+        assert_eq!(Checker::check("aabbb", "ccaac"), 36);
+        assert_eq!(Checker::check("aabbb", "cccac"), 27);
+        assert_eq!(Checker::check("aabbb", "caccc"), 6);
+        assert_eq!(Checker::check("baabb", "acaac"), 19);
+        assert_eq!(Checker::check("aaaar", "error"), 162); // BBBBG
     }
 
     #[test]
     fn test_if_success() {
-        assert_eq!(Checker::is_success_pattern("BBYBB"), false);
-        assert_eq!(Checker::is_success_pattern("GGGGG"), true);
+        assert_eq!(Checker::is_success_pattern(9), false);
+        assert_eq!(Checker::is_success_pattern(242), true);
     }
 
     #[test]
     fn test_group_by_pattern() {
         assert_eq!(group_by_pattern("salet", &BTreeSet::from(["sblet", "sclet", "zzzzz"])), HashMap::from([
-           (String::from("GBGGG"), BTreeSet::from(["sblet", "sclet"])),
-           (String::from("BBBBB"), BTreeSet::from(["zzzzz"])) 
+           (236, BTreeSet::from(["sblet", "sclet"])), // GBGGG
+           (0, BTreeSet::from(["zzzzz"])) 
         ]));
     }
 
@@ -424,7 +437,7 @@ mod tests {
             required_yellow: BTreeMap::from([('c', 2)]),
         };
         
-        let restriction_b = Restriction::from("azczz", "GBYBB");
+        let restriction_b = Restriction::from("azczz", 11);
         assert_eq!(restriction_b, Restriction{
             required_green: BTreeMap::from([(0, 'a')]),
             required_yellow: BTreeMap::from([('c', 1)]),
@@ -460,12 +473,12 @@ mod tests {
         let b = DecisionTree::from("salte", BTreeMap::from([]));
 
         let mut c = &DecisionTree::from("salet", BTreeMap::from([
-            (String::from("BBBBB"), a),
-            (String::from("GGGYY"), b),
+            (0, a),
+            (134, b),
         ]));
         
         assert_eq!(c.guess(), "salet");
-        c = DecisionTree::next(&c, "GGGYY");
+        c = DecisionTree::next(&c, 134);
         assert_eq!(c.guess(), "salte");
         
     }
@@ -478,7 +491,7 @@ mod tests {
             max_level: 1,
             total_count: 1,
             decision_tree: DecisionTree::from("salet", BTreeMap::from([
-                (String::from("GGGGG"), DecisionTree::new())
+                (242, DecisionTree::new())
             ]))
         })
     }
@@ -505,12 +518,13 @@ mod tests {
         "abide",
         "abled",
         "abode",
-        "abort"]);
+        "abort",
+        "salet"]);
 
         let best = dfs(0, &answers, &words);
         assert_eq!(best.has_result, true);
         assert_eq!(best.max_level, 3);
-        // assert_eq!(best.total_count, 21);
+        assert_eq!(best.total_count, 23); // 21 if not start with salet.
 
         let evaluator = Evaluator {
         answers: &answers,
