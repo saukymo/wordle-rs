@@ -1,5 +1,5 @@
 use std::cmp::max;
-use std::collections::{HashMap, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod decision_tree;
 use decision_tree::DecisionTree;
@@ -71,7 +71,7 @@ impl Restriction {
             }
         }   
 
-        let mut counter: HashMap<char, usize> = HashMap::new();
+        let mut counter: BTreeMap<char, usize> = BTreeMap::new();
         for c in guess.chars() {
             *counter.entry(c).or_insert(0) += 1
         }
@@ -91,7 +91,7 @@ struct Checker {
 
 impl Checker {
     pub fn check(target: &str, guess: &str) -> u8 {
-        let mut freq = HashMap::<char, usize>::new();
+        let mut freq = BTreeMap::<char, usize>::new();
         for (guess_c, target_c) in guess.chars().zip(target.chars()) {
             if guess_c != target_c {
                 let counter = freq.entry(target_c).or_insert(0);
@@ -188,8 +188,8 @@ impl<'a> Evaluator<'_> {
 }
 
 
-fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> HashMap<u8, BTreeSet<&'a str>>{
-    let mut groups = HashMap::new();
+fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> BTreeMap<u8, BTreeSet<&'a str>>{
+    let mut groups = BTreeMap::new();
     for answer in answers.into_iter() {
         let pattern = Checker::check(answer, guess);
         (*groups.entry(pattern).or_insert_with(BTreeSet::new)).insert(answer.clone());
@@ -200,34 +200,34 @@ fn group_by_pattern<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> HashMap<
 
 fn get_entropy(pattern: u8, length: u32) -> u32 {
 
-    let l = length as f32;
-    (l * l.log2().floor()) as u32
-
-
-    // if pattern == "GGGGG" {
-    //     return 0
-    // } else {
-    //     return 2 * length - 1
-    // }
+    if pattern == 242 {
+        return 0
+    } else {
+        return 2 * length - 1;
+    }
     
 }
 
 fn get_lower_bound_level(length: usize) -> u8 {
-    let l = length as f32;
-    (l.log2() / 243_f32.log2()).ceil() as u8 + 1
+
+    match length {
+        1 => 1,
+        2..=243 => 2,
+        _ => 3
+    }
 }
 
-fn get_entropy_sum<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> Option<(&'a str, u32, HashMap<u8, BTreeSet<&'a str>>)>{
+fn get_entropy_sum<'a>(guess: &'a str, answers: &BTreeSet<&'a str>) -> (&'a str, u32, BTreeMap<u8, BTreeSet<&'a str>>) {
     let groups = group_by_pattern(guess, answers);
 
-    if groups.len() == 1 && !groups.contains_key(&242) {
-        return None
-    };
     let entropy = groups.iter().map(|(pattern, group)| {
         get_entropy(*pattern, group.len() as u32)
     }).sum();
 
-    Some((guess, entropy, groups))
+    // println!("For guess {}, # of answers: {}, # of valid groups: {}", guess, answers.len(), groups.len());
+    // println!("{:?}", groups);
+
+    (guess, entropy, groups)
 }
 
 fn filter_available_guesses<'a> (restriction: &Restriction, words: &BTreeSet<&'a str>) -> BTreeSet<&'a str> {
@@ -289,6 +289,42 @@ impl<'a> Best<'a> {
 }   
 
 
+fn dfs_starter<'a>(start_word: &'a str, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>) -> Best<'a> {
+    let groups = group_by_pattern(start_word, answers);
+    let mut current_guess = Best::init(start_word, answers.len() as u32);
+
+    let mut sorted_groups: Vec<_> = groups.into_iter().collect();
+    sorted_groups.sort_unstable_by_key(|(_, g)| g.len()); 
+
+    for (pattern, pattern_answers) in sorted_groups {
+        let sub_result = if Checker::is_success_pattern(pattern) {
+            Best {
+                has_result: true,
+                max_level: 0,
+                total_count: 0,
+                decision_tree: DecisionTree::new()
+            }
+        } else if pattern_answers.len() == 1{
+            Best {
+                has_result: true,
+                max_level: 1,
+                total_count: 1,
+                decision_tree: DecisionTree::from(pattern_answers.iter().nth(0).unwrap(), BTreeMap::from([(242, DecisionTree::new())]))
+            }
+        } else if pattern_answers.len() <= 3 {
+            dfs(1, &pattern_answers, &pattern_answers)
+        } else {
+            let new_restrictions = Restriction::from(start_word, pattern);
+            dfs(1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables))
+        };
+
+        current_guess.update(pattern, sub_result);
+    }
+
+    current_guess.max_level += 1;
+    current_guess
+}
+
 fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>) -> Best<'a> {
 
     if current > MAX_TURNS {
@@ -297,27 +333,26 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
 
     let mut best_of_all_guess = Best::new();
 
-    let start_word = BTreeSet::from(["salet"]);
-    let valid_guesses = if current == 0 {
-        &start_word
-    } else {
-        if answers.len() <= 3 {
-            &answers
-        } else {
-            &availables
-        }
-    };
-
-    let mut preprocess_by_guess:Vec<_> = valid_guesses
+    let mut group_patterns = BTreeSet::<BTreeMap<u8, BTreeSet<&str>>>::new();
+    let mut preprocess_by_guess:Vec<_> = availables
         .iter()
-        .filter_map(|guess| get_entropy_sum(guess, &answers))
+        .filter_map(|guess| {
+            let (guess, entropy, groups) = get_entropy_sum(guess, &answers);
+            if group_patterns.contains(&groups) {
+                return None
+            }
+    
+            group_patterns.insert(groups.clone());
+
+            return Some((guess, entropy, groups))
+        })
         .collect();
+    
+    preprocess_by_guess.sort_by_cached_key(|(_, entropy, _)| *entropy);
 
-    preprocess_by_guess.sort_by(|(_, entropy_a, _), (_, entropy_b, _)| entropy_b.cmp(entropy_a));
+    for (guess, entropy, groups) in preprocess_by_guess {
 
-    for (guess, entropy, groups) in preprocess_by_guess.iter() {
-
-        let mut lower_bound = *entropy;
+        let mut lower_bound = entropy;
         let mut current_guess = Best::init(guess, answers.len() as u32);
 
         if current_guess.total_count + lower_bound > best_of_all_guess.total_count {
@@ -327,9 +362,9 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
         let mut sorted_groups: Vec<_> = groups.into_iter().collect();
         sorted_groups.sort_unstable_by_key(|(_, g)| g.len()); 
 
-        for (pattern, pattern_answers) in groups {
+        for (pattern, pattern_answers) in sorted_groups {
 
-            let sub_result = if Checker::is_success_pattern(*pattern) {
+            let sub_result = if Checker::is_success_pattern(pattern) {
                 Best {
                     has_result: true,
                     max_level: 0,
@@ -343,14 +378,10 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
                     total_count: 1,
                     decision_tree: DecisionTree::from(pattern_answers.iter().nth(0).unwrap(), BTreeMap::from([(242, DecisionTree::new())]))
                 }
+            } else if pattern_answers.len() <= 3 {
+                dfs(current + 1, &pattern_answers, &pattern_answers)
             } else {
-                if current + get_lower_bound_level(pattern_answers.len()) > MAX_TURNS {
-                    current_guess.has_result = false;
-                    break
-                }
-
-                // let new_restrictions = restrictions.merge(&Restriction::from(guess, &pattern));
-                let new_restrictions = Restriction::from(guess, *pattern);
+                let new_restrictions = Restriction::from(guess, pattern);
                 dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables))
             };
             
@@ -359,9 +390,9 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
                 break
             }
 
-            current_guess.update(*pattern, sub_result);
+            current_guess.update(pattern, sub_result);
 
-            let current_entropy = get_entropy(*pattern, pattern_answers.len() as u32);
+            let current_entropy = get_entropy(pattern, pattern_answers.len() as u32);
             lower_bound -= current_entropy;
 
             if current_guess.total_count  + lower_bound > best_of_all_guess.total_count {
@@ -379,12 +410,11 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
 }
 
 fn main() {
-    // 200, total 582, 72s
-    // pattern from string -> u8, 67s
-    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(200).collect();
+    // 1075, total 3587, max 6, time: 15.02s
+    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(1075).collect();
     let words: BTreeSet<_> = include_str!("../data/words.txt").lines().collect();
 
-     let best = dfs(0, &answers, &words);
+    let best = dfs_starter("salet", &answers, &words);
 
     println!("{}, {}", best.max_level, best.total_count);
     
@@ -401,8 +431,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::*;
-    use std::collections::HashMap;
-    use std::collections::BTreeSet;
 
     #[test]
     fn test_check() {
@@ -424,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_group_by_pattern() {
-        assert_eq!(group_by_pattern("salet", &BTreeSet::from(["sblet", "sclet", "zzzzz"])), HashMap::from([
+        assert_eq!(group_by_pattern("salet", &BTreeSet::from(["sblet", "sclet", "zzzzz"])), BTreeMap::from([
            (236, BTreeSet::from(["sblet", "sclet"])), // GBGGG
            (0, BTreeSet::from(["zzzzz"])) 
         ]));
@@ -524,14 +552,14 @@ mod tests {
         let best = dfs(0, &answers, &words);
         assert_eq!(best.has_result, true);
         assert_eq!(best.max_level, 3);
-        assert_eq!(best.total_count, 23); // 21 if not start with salet.
+        assert_eq!(best.total_count, 21); 
 
         let evaluator = Evaluator {
-        answers: &answers,
-        words: &words
-    };
+            answers: &answers,
+            words: &words
+        };
 
-    evaluator.evaluate(best.decision_tree, true);
+        evaluator.evaluate(best.decision_tree, true);
 
     }
 
@@ -542,5 +570,51 @@ mod tests {
         assert_eq!(get_lower_bound_level(5), 2);
         assert_eq!(get_lower_bound_level(243), 2);
         assert_eq!(get_lower_bound_level(244), 3);
+    }
+
+    #[test]
+    fn test_get_entropy() {
+        assert_eq!(get_entropy(242, 1), 0);
+        assert_eq!(get_entropy(0, 2), 3);
+        assert_eq!(get_entropy(0, 5), 9);
+        assert_eq!(get_entropy(0, 244), 487);
+    }
+
+    #[test]
+    fn test_a_few_search_with_starter() {
+        let answers = BTreeSet::from(["aback", 
+        "abase",
+        "abate",
+        "abbey",
+        "abbot",
+        "abhor",
+        "abide",
+        "abled",
+        "abode",
+        "abort"]);
+    
+        let words = BTreeSet::from(["aback", 
+        "abase",
+        "abate",
+        "abbey",
+        "abbot",
+        "abhor",
+        "abide",
+        "abled",
+        "abode",
+        "abort",
+        "salet"]);
+
+        let best = dfs_starter("salet", &answers, &words);
+        assert_eq!(best.has_result, true);
+        assert_eq!(best.max_level, 3);
+        assert_eq!(best.total_count, 23); 
+
+        let evaluator = Evaluator {
+            answers: &answers,
+            words: &words
+        };
+
+        evaluator.evaluate(best.decision_tree, true);
     }
 }
