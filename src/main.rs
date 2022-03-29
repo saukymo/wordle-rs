@@ -1,4 +1,5 @@
 use std::cmp::max;
+use std::sync::{Arc, Mutex};
 use std::collections::{BTreeMap, BTreeSet};
 
 use rayon::prelude::*;
@@ -9,7 +10,7 @@ use decision_tree::DecisionTree;
 
 const MAX_TURNS: u8 = 5;
 
-#[derive(Debug, PartialEq, Clone, Hash, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, PartialOrd, Ord)]
 struct Restriction {
     required_green: BTreeMap<usize, char>,
     required_yellow: BTreeMap<char, usize>
@@ -290,6 +291,7 @@ impl<'a> Best<'a> {
     }
 }   
 
+type Cache<'a> = BTreeMap<Restriction, BTreeMap<BTreeSet<&'a str>, BTreeMap<u8, Best<'a>>>>;
 
 fn dfs_starter<'a>(start_word: &'a str, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>) -> Best<'a> {
     let groups = group_by_pattern(start_word, answers);
@@ -298,8 +300,11 @@ fn dfs_starter<'a>(start_word: &'a str, answers: &BTreeSet<&'a str>, availables:
     let mut sorted_groups: Vec<_> = groups.into_iter().collect();
     sorted_groups.sort_unstable_by_key(|(_, g)| g.len()); 
 
+    let cache = Arc::new(Mutex::new(Cache::new()));
 
-   let bests: Vec<_> = sorted_groups.par_iter().map(|(pattern, pattern_answers)| {
+    println!("# of threads: {}", rayon::current_num_threads()); // Which is 16 in my macbook pro.
+
+    let bests: Vec<_> = sorted_groups.par_iter().map(|(pattern, pattern_answers)| {
         let best = if Checker::is_success_pattern(*pattern) {
             Best {
                 has_result: true,
@@ -315,10 +320,10 @@ fn dfs_starter<'a>(start_word: &'a str, answers: &BTreeSet<&'a str>, availables:
                 decision_tree: DecisionTree::from(pattern_answers.iter().nth(0).unwrap(), BTreeMap::from([(242, DecisionTree::new())]))
             }
         } else if pattern_answers.len() <= 3 {
-            dfs(1, &pattern_answers, &pattern_answers)
+            dfs(1, &pattern_answers, &pattern_answers, Restriction::new(), &cache)
         } else {
             let new_restrictions = Restriction::from(start_word, *pattern);
-            dfs(1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables))
+            dfs(1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables), Restriction::new(), &cache)
         };
         (pattern, best)
     }).collect();
@@ -331,13 +336,41 @@ fn dfs_starter<'a>(start_word: &'a str, answers: &BTreeSet<&'a str>, availables:
     current_guess
 }
 
-fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>) -> Best<'a> {
+fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>, restrictions: Restriction, cache:&Arc<Mutex<Cache<'a>>>) -> Best<'a> {
 
     if current > MAX_TURNS {
         return Best::new();
     }
 
     let mut best_of_all_guess = Best::new();
+
+    if let Some(restrictions_cache) = cache.lock().unwrap().get(&restrictions) {
+        if let Some(answers_cache) = restrictions_cache.get(answers) {
+
+            // Cached Result:
+            if let Some(level_cache) = answers_cache.get(&current) {
+                return level_cache.clone();
+            }
+
+            // Cached No Result:
+            // for level in 0..(current - 1) {
+            //     if let Some(level_cache) = answers_cache.get(&level) {
+            //         if !level_cache.has_result || level_cache.max_level + current <= MAX_TURNS {
+            //             println!("Got cached no result.");
+            //             return level_cache.clone()
+            //         }
+            //     }
+            // }
+            
+            // Cached Base Line:
+            for level in (current + 1) .. MAX_TURNS {
+                if let Some(level_cache) = answers_cache.get(&level) {
+                    best_of_all_guess = level_cache.clone();
+                    break
+                }
+            }
+        }
+    }
 
     let mut group_patterns = BTreeSet::<BTreeMap<u8, BTreeSet<&str>>>::new();
     let mut preprocess_by_guess:Vec<_> = availables
@@ -361,7 +394,7 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
         let mut lower_bound = entropy;
         let mut current_guess = Best::init(guess, answers.len() as u32);
 
-        if current_guess.total_count + lower_bound > best_of_all_guess.total_count {
+        if best_of_all_guess.has_result && current_guess.total_count + lower_bound > best_of_all_guess.total_count {
             continue;
         }
 
@@ -385,10 +418,11 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
                     decision_tree: DecisionTree::from(pattern_answers.iter().nth(0).unwrap(), BTreeMap::from([(242, DecisionTree::new())]))
                 }
             } else if pattern_answers.len() <= 3 {
-                dfs(current + 1, &pattern_answers, &pattern_answers)
+                let new_restrictions = Restriction::from(guess, pattern);
+                dfs(current + 1, &pattern_answers, &pattern_answers, new_restrictions, cache)
             } else {
                 let new_restrictions = Restriction::from(guess, pattern);
-                dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables))
+                dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables), new_restrictions, cache)
             };
             
             if !sub_result.has_result {
@@ -412,12 +446,25 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
         }
     }
 
+    cache  
+        .lock()
+        .unwrap()
+        .entry(restrictions)
+        .or_insert_with(BTreeMap::new)
+        .entry(availables.to_owned())
+        .or_insert_with(BTreeMap::new)
+        .insert(current, best_of_all_guess.clone());
+
     best_of_all_guess
 }
 
 fn main() {
-    // 1075, total 3587, max 6, time: 15.02s
-    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(1000).collect();
+    // 1075, total 3587, max 6
+    // 1200, total 4032 max 6, 10s
+    // 1300, total 4412 max 6, 18.97s
+    // 1400, total 4793 max 6, 37.64s
+
+    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(1400).collect();
     let words: BTreeSet<_> = include_str!("../data/words.txt").lines().collect();
 
     let best = dfs_starter("salet", &answers, &words);
@@ -519,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_single_search() {
-        let best = dfs(0, &BTreeSet::from(["salet"]), &BTreeSet::from(["salet"]));
+        let best = dfs(0, &BTreeSet::from(["salet"]), &BTreeSet::from(["salet"]), Restriction::new(), &Arc::new(Mutex::new(Cache::new())));
         assert_eq!(best, Best {
             has_result: true,
             max_level: 1,
@@ -555,7 +602,7 @@ mod tests {
         "abort",
         "salet"]);
 
-        let best = dfs(0, &answers, &words);
+        let best = dfs(0, &answers, &words, Restriction::new(), &Arc::new(Mutex::new(Cache::new())));
         assert_eq!(best.has_result, true);
         assert_eq!(best.max_level, 3);
         assert_eq!(best.total_count, 21); 
