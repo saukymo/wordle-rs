@@ -1,6 +1,8 @@
 use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet};
 
+use rayon::prelude::*;
+
 pub mod decision_tree;
 use decision_tree::DecisionTree;
 
@@ -296,8 +298,9 @@ fn dfs_starter<'a>(start_word: &'a str, answers: &BTreeSet<&'a str>, availables:
     let mut sorted_groups: Vec<_> = groups.into_iter().collect();
     sorted_groups.sort_unstable_by_key(|(_, g)| g.len()); 
 
-    for (pattern, pattern_answers) in sorted_groups {
-        let sub_result = if Checker::is_success_pattern(pattern) {
+
+   let bests: Vec<_> = sorted_groups.par_iter().map(|(pattern, pattern_answers)| {
+        let best = if Checker::is_success_pattern(*pattern) {
             Best {
                 has_result: true,
                 max_level: 0,
@@ -314,11 +317,14 @@ fn dfs_starter<'a>(start_word: &'a str, answers: &BTreeSet<&'a str>, availables:
         } else if pattern_answers.len() <= 3 {
             dfs(1, &pattern_answers, &pattern_answers)
         } else {
-            let new_restrictions = Restriction::from(start_word, pattern);
+            let new_restrictions = Restriction::from(start_word, *pattern);
             dfs(1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables))
         };
+        (pattern, best)
+    }).collect();
 
-        current_guess.update(pattern, sub_result);
+    for (pattern, best) in bests {
+        current_guess.update(*pattern, best);
     }
 
     current_guess.max_level += 1;
@@ -411,7 +417,7 @@ fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a s
 
 fn main() {
     // 1075, total 3587, max 6, time: 15.02s
-    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(1075).collect();
+    let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().take(1000).collect();
     let words: BTreeSet<_> = include_str!("../data/words.txt").lines().collect();
 
     let best = dfs_starter("salet", &answers, &words);
