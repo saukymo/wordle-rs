@@ -179,3 +179,11 @@ impl<'a> DecisionTree<'a> {
         Ok(())
     }
 }
+
+
+#[derive(Debug)]
+pub struct Counter{
+    pub result_counter: u32,
+    pub no_result_counter: u32,
+    pub baseline_counter: u32,
+}

@@ -47,10 +47,17 @@ pub fn filter_available_guesses<'a> (restriction: &Restriction, words: &BTreeSet
     }).cloned().collect()
 }
 
+pub fn filter_available_answers<'a> (guess: &'a str, pattern: u8, answers: &BTreeSet<&'a str>) -> BTreeSet<&'a str> {
+    answers.iter().filter(|answer| {
+        Checker::check(answer, guess) == pattern
+    }).cloned().collect()
+}
 
-pub fn limit(length: usize) -> usize {
-    match length {
-        0..=15 => length,
-        _ => 15,
-    }
+// limit 15 can get best results.
+pub fn limit(_length: usize) -> usize {
+    13
+    // match length {
+    //     0..=15 => length,
+    //     _ => 15,
+    // }
 }

@@ -8,23 +8,20 @@ pub mod wrapper;
 pub mod dfs;
 
 use game::Evaluator;
-use wrapper::{parallel_wrapper, start_word_wrapper};
+use wrapper::start_word_wrapper;
 
 
 fn main() {
     let answers: BTreeSet<_> = include_str!("../data/answers.txt").lines().collect();
     let words: BTreeSet<_> = include_str!("../data/words.txt").lines().collect();
 
+    // 1000, total 3301, max 6
     // 1075, total 3587, max 6
-    // 1200, total 4032 max 6, 10s
-    // 1300, total 4412 max 6, 18.97s
-    // 1400, total 4793 max 6, 37.64s
+    // 1200, total 4032, max 6, 10s
+    // 1300, total 4412, max 6, 18.97s
+    // 1400, total 4793, max 6, 37.64s
+    // all, total 8116, max 7, 14.26s with hack.
     let best = start_word_wrapper("salet", &answers, &words);
-
-
-    // 40, total 108 max 4, 78s
-    // 600, total 1875 max 5, 270.84s
-    // let best = parallel_wrapper("salet", &answers, &words);
 
     println!("{}, {}", best.max_level, best.total_count);
     
@@ -45,8 +42,8 @@ mod tests {
 
     use crate::utils::*;
     use crate::game::{Checker, Evaluator};
-    use crate::common::{Restriction, Best, Cache, DecisionTree};
-    use crate::wrapper::{start_word_wrapper, parallel_wrapper};
+    use crate::common::{Restriction, Best, Cache, DecisionTree, Counter};
+    use crate::wrapper::{start_word_wrapper, parallel_wrapper, baseline_wrapper};
     use crate::dfs::{dfs, dfs_with_cache};    
 
 
@@ -131,7 +128,13 @@ mod tests {
 
     #[test]
     fn test_single_search() {
-        let best = dfs_with_cache(0, &BTreeSet::from(["salet"]), &BTreeSet::from(["salet"]), Restriction::new(), &Arc::new(Mutex::new(Cache::new())));
+        let mut counter = Counter {
+            result_counter: 0,
+            no_result_counter: 0,
+            baseline_counter: 0
+        };
+
+        let best = dfs_with_cache(0, &BTreeSet::from(["salet"]), &BTreeSet::from(["salet"]), Restriction::new(), &Arc::new(Mutex::new(Cache::new())), false, &mut counter);
         assert_eq!(best, Best {
             has_result: true,
             max_level: 1,
@@ -167,7 +170,13 @@ mod tests {
         "abort",
         "salet"]);
 
-        let best = dfs_with_cache(0, &answers, &words, Restriction::new(), &Arc::new(Mutex::new(Cache::new())));
+        let mut counter = Counter {
+            result_counter: 0,
+            no_result_counter: 0,
+            baseline_counter: 0
+        };
+
+        let best = dfs_with_cache(0, &answers, &words, Restriction::new(), &Arc::new(Mutex::new(Cache::new())), false, &mut counter);
         assert_eq!(best.has_result, true);
         assert_eq!(best.max_level, 3);
         assert_eq!(best.total_count, 21); 
@@ -299,6 +308,44 @@ mod tests {
         "salet"]);
 
         let best = parallel_wrapper("salet", &answers, &words);
+        assert_eq!(best.has_result, true);
+        assert_eq!(best.max_level, 3);
+        assert_eq!(best.total_count, 23); 
+
+        let evaluator = Evaluator {
+            answers: &answers,
+            words: &words
+        };
+
+        evaluator.evaluate(best.decision_tree, true);
+    }
+
+    #[test]
+    fn test_a_few_search_with_baseline_wrapper() {
+        let answers = BTreeSet::from(["aback", 
+        "abase",
+        "abate",
+        "abbey",
+        "abbot",
+        "abhor",
+        "abide",
+        "abled",
+        "abode",
+        "abort"]);
+    
+        let words = BTreeSet::from(["aback", 
+        "abase",
+        "abate",
+        "abbey",
+        "abbot",
+        "abhor",
+        "abide",
+        "abled",
+        "abode",
+        "abort",
+        "salet"]);
+
+        let best = baseline_wrapper("salet", &answers, &words);
         assert_eq!(best.has_result, true);
         assert_eq!(best.max_level, 3);
         assert_eq!(best.total_count, 23); 

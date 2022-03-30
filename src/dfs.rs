@@ -2,13 +2,13 @@ use std::sync::{Arc, Mutex};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::utils::*;
-use crate::common::{Restriction, Best, Cache, DecisionTree};
+use crate::common::{Restriction, Best, Cache, DecisionTree, Counter};
 use crate::game::Checker;
 
 const MAX_TURNS: u8 = 5;
 
 
-pub fn dfs_with_cache<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>, restrictions: Restriction, cache:&Arc<Mutex<Cache<'a>>>) -> Best<'a> {
+pub fn dfs_with_cache<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>, restrictions: Restriction, cache:&Arc<Mutex<Cache<'a>>>, use_limit: bool, counter:&mut Counter) -> Best<'a> {
 
     if current > MAX_TURNS {
         return Best::new();
@@ -21,6 +21,7 @@ pub fn dfs_with_cache<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: 
 
             // Cached Result:
             if let Some(level_cache) = answers_cache.get(&current) {
+                counter.result_counter += 1;
                 return level_cache.clone();
             }
 
@@ -28,7 +29,7 @@ pub fn dfs_with_cache<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: 
             // for level in 0..(current - 1) {
             //     if let Some(level_cache) = answers_cache.get(&level) {
             //         if !level_cache.has_result || level_cache.max_level + current <= MAX_TURNS {
-            //             println!("Got cached no result.");
+            //             counter.no_result_counter += 1;
             //             return level_cache.clone()
             //         }
             //     }
@@ -37,6 +38,7 @@ pub fn dfs_with_cache<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: 
             // Cached Base Line:
             for level in (current + 1) .. MAX_TURNS {
                 if let Some(level_cache) = answers_cache.get(&level) {
+                    counter.baseline_counter += 1;
                     best_of_all_guess = level_cache.clone();
                     break
                 }
@@ -62,12 +64,16 @@ pub fn dfs_with_cache<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: 
     preprocess_by_guess
         .sort_by_cached_key(|(_, entropy, _)| *entropy);
     
-    let length = preprocess_by_guess.len();
-    let top_guesses:Vec<_> = preprocess_by_guess
-        .into_iter()
-        .take(limit(length))
-        .collect();
-
+    let top_guesses:Vec<_> = if use_limit {
+        let length = preprocess_by_guess.len();
+        preprocess_by_guess
+            .into_iter()
+            .take(limit(length))
+            .collect()
+    } else {
+        preprocess_by_guess
+    };
+    
     for (guess, entropy, groups) in top_guesses {
 
         let mut lower_bound = entropy;
@@ -98,10 +104,10 @@ pub fn dfs_with_cache<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: 
                 }
             } else if pattern_answers.len() <= 3 {
                 let new_restrictions = Restriction::from(guess, pattern);
-                dfs_with_cache(current + 1, &pattern_answers, &pattern_answers, new_restrictions, cache)
+                dfs_with_cache(current + 1, &pattern_answers, &pattern_answers, new_restrictions, cache, use_limit, counter)
             } else {
                 let new_restrictions = Restriction::from(guess, pattern);
-                dfs_with_cache(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables), new_restrictions, cache)
+                dfs_with_cache(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables), new_restrictions, cache, use_limit, counter)
             };
             
             if !sub_result.has_result {
