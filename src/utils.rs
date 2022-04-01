@@ -61,3 +61,20 @@ pub fn limit(_length: usize) -> usize {
     //     _ => 15,
     // }
 }
+
+pub fn stat_color(guess: &str, stat: u8) -> String {
+    let mut s = String::new();
+    let mut stat = stat;
+    for c in guess.chars() {
+        match stat % 3 {
+            0 => s += "\x1b[0m",
+            1 => s += "\x1b[1;33m",
+            2 => s += "\x1b[1;32m",
+            _ => unreachable!(),
+        }
+        s.push(c);
+        stat /= 3;
+    }
+    s += "\x1b[0m";
+    s
+}

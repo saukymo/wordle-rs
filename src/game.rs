@@ -1,7 +1,7 @@
 use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet};
 use crate::common::{Restriction, DecisionTree};
-use crate::utils::filter_available_guesses;
+use crate::utils::{filter_available_guesses, stat_color};
 
 pub struct Checker {
 }
@@ -79,8 +79,8 @@ impl<'a> Evaluator<'_> {
 
                 let pattern = Checker::check(answer, &guess);
 
-                println!("{}: {} {}", turns, guess, pattern);
-
+                println!("{}: {}", turns, stat_color(&guess, pattern));
+                
                 turns += 1;
                 if Checker::is_success_pattern(pattern) {
                     break;

@@ -233,3 +233,36 @@ pub fn dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&
 
     best_of_all_guess
 }
+
+
+fn basic_dfs<'a>(current: u8, answers: &BTreeSet<&'a str>, availables: &BTreeSet<&'a str>) -> Best<'a> {
+    let mut best_of_all_guess = Best::new();
+    for guess in availables {
+
+        let groups = group_by_pattern(guess, &answers);
+        
+        if groups.len() == 1 && !groups.contains_key(&242) {
+            continue
+        }
+
+        let mut current_guess = Best::init(guess, answers.len() as u32);
+
+        for (pattern, pattern_answers) in  groups {
+            let sub_result = if Checker::is_success_pattern(pattern) {
+                Best {
+                    has_result: true,
+                    max_level: 0,
+                    total_count: 0,
+                    decision_tree: DecisionTree::new()
+                }
+            } else {
+                let new_restrictions = Restriction::from(guess, pattern);
+                basic_dfs(current + 1, &pattern_answers, &filter_available_guesses(&new_restrictions, &availables))
+            };   
+            current_guess.update(pattern, sub_result);
+        }
+        best_of_all_guess.better(current_guess);
+    }
+
+    best_of_all_guess
+}
